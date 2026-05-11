@@ -18,22 +18,26 @@
 #include "gethostbyname.h"
 #include "networks.h"
 #include "safeUtil.h"
+#include "pduUtil.h"
+#include "cpe464.h"
 
 #define MAXBUF 80
 
 void talkToServer(int socketNum, struct sockaddr_in6 * server);
 int readFromStdin(char * buffer);
-int checkArgs(int argc, char * argv[]);
+void checkArgs(int argc, char * argv[], double *errorRate, int *portNumber);
 
 int main (int argc, char *argv[])
  {
 	int socketNum = 0;				
 	struct sockaddr_in6 server;		// Supports 4 and 6 but requires IPv6 struct
+	double errorRate = 0;
 	int portNumber = 0;
 	
-	portNumber = checkArgs(argc, argv);
-	
-	socketNum = setupUdpClientToServer(&server, argv[1], portNumber);
+	checkArgs(argc, argv, &errorRate, &portNumber);
+	sendErr_init(errorRate, DROP_ON, FLIP_OFF, DEBUG_ON, RSEED_OFF);
+
+	socketNum = setupUdpClientToServer(&server, argv[2], portNumber);
 	
 	talkToServer(socketNum, &server);
 	
@@ -48,6 +52,12 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server)
 	char * ipString = NULL;
 	int dataLen = 0; 
 	char buffer[MAXBUF+1];
+
+	uint8_t pduBuffer[MAXBUF+1+SIZEOF_PDU_HEADER];
+	uint32_t sequenceNumber = 0;
+	uint8_t flag = 3;
+	int pduLen = 0;
+	int recvLen = 0;
 	
 	buffer[0] = '\0';
 	while (buffer[0] != '.')
@@ -55,15 +65,20 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server)
 		dataLen = readFromStdin(buffer);
 
 		printf("Sending: %s with len: %d\n", buffer,dataLen);
+
+		pduLen = createPDU(pduBuffer, sequenceNumber, flag, (uint8_t *) buffer, dataLen);
+		sequenceNumber++;
+		printPDU(pduBuffer, pduLen);
 	
-		safeSendto(socketNum, buffer, dataLen, 0, (struct sockaddr *) server, serverAddrLen);
+		safeSendto(socketNum, pduBuffer, pduLen, 0, (struct sockaddr *) server, serverAddrLen);
 		
-		safeRecvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr *) server, &serverAddrLen);
+		recvLen = safeRecvfrom(socketNum, pduBuffer, MAXBUF+SIZEOF_PDU_HEADER, 0, (struct sockaddr *) server, &serverAddrLen);
 		
 		// print out bytes received
 		ipString = ipAddressToString(server);
 		printf("Server with ip: %s and port %d said it received %s\n", ipString, ntohs(server->sin6_port), buffer);
-	      
+
+		printPDU(pduBuffer, recvLen);
 	}
 }
 
@@ -92,22 +107,25 @@ int readFromStdin(char * buffer)
 	return inputLen;
 }
 
-int checkArgs(int argc, char * argv[])
-{
-
-    int portNumber = 0;
-	
+void checkArgs(int argc, char * argv[], double *errorRate, int *portNumber)
+{	
     /* check command line arguments  */
 	
-	if (argc != 3)
+	if (argc != 4)
 	{
-		printf("usage: %s host-name port-number \n", argv[0]);
+		printf("usage: %s error-rate host-name port-number \n", argv[0]);
 		exit(1);
 	}
 	
-	portNumber = atoi(argv[2]);
+	*errorRate = atof(argv[1]);
+	*portNumber = atoi(argv[3]);
 		
-	return portNumber;
+	if ((*errorRate > 1) || (*errorRate < 0)) {
+		printf("error rate must be between 1 and 0\n");
+		exit(1);
+	}
+
+	return;
 }
 
 
